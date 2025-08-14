@@ -222,6 +222,7 @@
             <p>M-JPEG stream from k1c.drewburr.com</p>
             <p id="lastChecked">Last checked: <span id="lastCheckedTime">Never</span></p>
             <p id="streamInfo">Stream resolution and framerate will be detected automatically.</p>
+            <p id="fpsInfo">FPS: <span id="fpsValue">0</span></p>
         </div>
     </div>
 
@@ -240,6 +241,11 @@
         let streamInterval;
         let snapshotCounter = 1;
         let isStreaming = false;
+        
+        // FPS tracking variables
+        let frameTimestamps = [];
+        let lastFrameTime = 0;
+        let currentFPS = 0;
 
         // Initialize when page loads
         document.addEventListener('DOMContentLoaded', function() {
@@ -287,6 +293,9 @@
 
             isStreaming = true;
             snapshotCounter = 1;
+            frameTimestamps = []; // Reset FPS tracking
+            currentFPS = 0;
+            updateFPSDisplay();
 
             function fetchNextSnapshot() {
                 if (!isStreaming) return;
@@ -295,6 +304,24 @@
                 img.onload = function() {
                     streamFrame.src = this.src;
                     snapshotCounter++;
+                    
+                    // Track frame timing for FPS calculation
+                    const currentTime = performance.now();
+                    frameTimestamps.push(currentTime);
+                    
+                    // Keep only the last 30 frames for FPS calculation
+                    if (frameTimestamps.length > 30) {
+                        frameTimestamps.shift();
+                    }
+                    
+                    // Calculate FPS if we have enough frames
+                    if (frameTimestamps.length >= 2) {
+                        const timeSpan = frameTimestamps[frameTimestamps.length - 1] - frameTimestamps[0];
+                        const frameCount = frameTimestamps.length - 1;
+                        currentFPS = (frameCount / timeSpan) * 1000; // Convert to FPS
+                        updateFPSDisplay();
+                    }
+                    
                     setTimeout(fetchNextSnapshot, 100); // 10 FPS (100ms between frames)
                 };
 
@@ -315,6 +342,10 @@
                 clearInterval(streamInterval);
                 streamInterval = null;
             }
+            // Reset FPS when stream stops
+            frameTimestamps = [];
+            currentFPS = 0;
+            updateFPSDisplay();
         }
 
         function refreshStream() {
@@ -427,6 +458,13 @@
             streamInfo.textContent = `Stream resolution: ${width}x${height}${estimatedText} (${aspectRatio}:1 aspect ratio)`;
         }
 
+        function updateFPSDisplay() {
+            const fpsValue = document.getElementById('fpsValue');
+            if (fpsValue) {
+                fpsValue.textContent = currentFPS > 0 ? currentFPS.toFixed(1) : '0';
+            }
+        }
+
         function toggleFullscreen() {
             if (!document.fullscreenElement) {
                 streamFrame.requestFullscreen().catch(err => {
@@ -467,25 +505,15 @@
         // Handle visibility change to pause/resume stream when tab is not active
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) {
+                // Only stop stream when tab is completely hidden, not just unfocused
                 stopSnapshotStream();
                 clearInterval(streamCheckInterval);
             } else {
+                // Resume stream when tab becomes visible again
                 startSnapshotStream();
                 startPeriodicCheck();
                 checkStreamStatus();
             }
-        });
-
-        // Handle window focus/blur for additional efficiency
-        window.addEventListener('focus', function() {
-            if (!isStreaming) {
-                startSnapshotStream();
-            }
-            checkStreamStatus();
-        });
-
-        window.addEventListener('blur', function() {
-            stopSnapshotStream();
         });
 
         // Handle window resize to readjust iframe size
