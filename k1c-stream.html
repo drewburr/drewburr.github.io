@@ -303,7 +303,7 @@
                     setTimeout(fetchNextSnapshot, 1000);
                 };
 
-                img.src = `http://k1c.drewburr.com:8080/?action=snapshot&n=${snapshotCounter}&t=${Date.now()}`;
+                img.src = `https://printstream.drewburr.com/snapshot?n=${snapshotCounter}&t=${Date.now()}`;
             }
 
             fetchNextSnapshot();
@@ -357,7 +357,7 @@
                 updateLastChecked();
             };
 
-            testImg.src = `http://k1c.drewburr.com:8080/?action=snapshot&n=1&t=${Date.now()}`;
+            testImg.src = `https://printstream.drewburr.com/snapshot?n=1&t=${Date.now()}`;
         }
 
         function detectStreamResolution() {
@@ -392,7 +392,7 @@
                 updateStreamInfo(defaultWidth, defaultHeight, true);
             };
 
-            testImg.src = `http://k1c.drewburr.com:8080/?action=snapshot&n=1&t=${Date.now()}`;
+            testImg.src = `https://printstream.drewburr.com/snapshot?n=1&t=${Date.now()}`;
         }
 
         function adjustIframeSize(width, height) {
