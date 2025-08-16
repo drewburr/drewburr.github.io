@@ -213,13 +213,11 @@
         </div>
 
         <div class="controls">
-            <button id="refreshBtn" onclick="refreshStream()">Refresh Stream</button>
+            <button id="reconnectBtn" onclick="reconnectWebSocket()">Reconnect</button>
             <button id="fullscreenBtn" onclick="toggleFullscreen()">Toggle Fullscreen</button>
-            <button id="checkStatusBtn" onclick="checkStreamStatus()">Check Status</button>
         </div>
 
         <div class="info">
-            <p>M-JPEG stream from k1c.drewburr.com</p>
             <p id="lastChecked">Last checked: <span id="lastCheckedTime">Never</span></p>
             <p id="streamInfo">Stream resolution and framerate will be detected automatically.</p>
             <p id="fpsInfo">FPS: <span id="fpsValue">0</span></p>
@@ -232,38 +230,33 @@
         const status = document.getElementById('status');
         const statusText = document.getElementById('statusText');
         const lastCheckedTime = document.getElementById('lastCheckedTime');
-        const refreshBtn = document.getElementById('refreshBtn');
+        const reconnectBtn = document.getElementById('reconnectBtn');
         const streamInfo = document.getElementById('streamInfo');
+        const fpsValue = document.getElementById('fpsValue');
 
-        let streamCheckInterval;
-        let loadTimeout;
+        // Configuration
+        const WEBSOCKET_URL = 'ws://localhost:8080';
+
+        let websocket = null;
         let currentResolution = { width: 0, height: 0 };
-        let streamInterval;
-        let snapshotCounter = 1;
-        let isStreaming = false;
-        
-        // FPS tracking variables
+        let isInitialized = false;
+        let resizeTimeout = null;
+        let currentObjectUrl = null; // Track the current blob URL
+
+        // Performance tracking
         let frameTimestamps = [];
-        let lastFrameTime = 0;
         let currentFPS = 0;
 
         // Initialize when page loads
         document.addEventListener('DOMContentLoaded', function() {
             initializeStream();
-            startPeriodicCheck();
             initializeTheme();
         });
 
         function initializeStream() {
-            showLoading(true);
-            startSnapshotStream();
-
-            setTimeout(() => {
-                showLoading(false);
-                streamFrame.style.opacity = '1';
-                checkStreamStatus();
-                detectStreamResolution();
-            }, 2000);
+            if (isInitialized) return;
+            isInitialized = true;
+            connectWebSocket();
         }
 
         function showLoading(show) {
@@ -286,170 +279,124 @@
             lastCheckedTime.textContent = now.toLocaleTimeString();
         }
 
-        function startSnapshotStream() {
-            if (isStreaming) {
-                stopSnapshotStream();
+        function connectWebSocket() {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                console.log("WebSocket is already open.");
+                return;
             }
 
-            isStreaming = true;
-            snapshotCounter = 1;
-            frameTimestamps = []; // Reset FPS tracking
-            currentFPS = 0;
-            updateFPSDisplay();
+            showLoading(true);
+            updateStatus('checking', `Connecting to ${WEBSOCKET_URL}...`);
+            reconnectBtn.disabled = true;
 
-            function fetchNextSnapshot() {
-                if (!isStreaming) return;
+            websocket = new WebSocket(WEBSOCKET_URL);
 
-                const img = new Image();
-                img.onload = function() {
-                    streamFrame.src = this.src;
-                    snapshotCounter++;
-                    
-                    // Track frame timing for FPS calculation
-                    const currentTime = performance.now();
-                    frameTimestamps.push(currentTime);
-                    
-                    // Keep only the last 30 frames for FPS calculation
-                    if (frameTimestamps.length > 30) {
+            websocket.onopen = () => {
+                console.log('WebSocket connection established.');
+                updateStatus('online', 'Stream connected');
+                updateLastChecked();
+                showLoading(false);
+                reconnectBtn.disabled = false;
+                frameTimestamps = []; // Reset FPS on new connection
+            };
+
+            websocket.onmessage = (event) => {
+                if (event.data instanceof Blob) {
+                    if (currentObjectUrl) {
+                        URL.revokeObjectURL(currentObjectUrl);
+                    }
+                    currentObjectUrl = URL.createObjectURL(event.data);
+                    streamFrame.src = currentObjectUrl;
+
+                    // FPS calculation
+                    const now = performance.now();
+                    frameTimestamps.push(now);
+                    while (frameTimestamps.length > 0 && frameTimestamps[0] <= now - 1000) {
                         frameTimestamps.shift();
                     }
-                    
-                    // Calculate FPS if we have enough frames
-                    if (frameTimestamps.length >= 2) {
-                        const timeSpan = frameTimestamps[frameTimestamps.length - 1] - frameTimestamps[0];
-                        const frameCount = frameTimestamps.length - 1;
-                        currentFPS = (frameCount / timeSpan) * 1000; // Convert to FPS
-                        updateFPSDisplay();
-                    }
-                    
-                    setTimeout(fetchNextSnapshot, 100); // 10 FPS (100ms between frames)
-                };
-
-                img.onerror = function() {
-                    // If snapshot fails, try again after a longer delay
-                    setTimeout(fetchNextSnapshot, 1000);
-                };
-
-                img.src = `https://printstream.drewburr.com/snapshot?n=${snapshotCounter}&t=${Date.now()}`;
-            }
-
-            fetchNextSnapshot();
-        }
-
-        function stopSnapshotStream() {
-            isStreaming = false;
-            if (streamInterval) {
-                clearInterval(streamInterval);
-                streamInterval = null;
-            }
-            // Reset FPS when stream stops
-            frameTimestamps = [];
-            currentFPS = 0;
-            updateFPSDisplay();
-        }
-
-        function refreshStream() {
-            refreshBtn.disabled = true;
-            updateStatus('checking', 'Refreshing stream...');
-            showLoading(true);
-
-            stopSnapshotStream();
-
-            setTimeout(() => {
-                startSnapshotStream();
-                refreshBtn.disabled = false;
-                setTimeout(() => {
-                    showLoading(false);
-                    updateStatus('online', 'Stream refreshed');
-                    updateLastChecked();
-                }, 2000);
-            }, 500);
-        }
-
-        function checkStreamStatus() {
-            updateStatus('checking', 'Checking stream availability...');
-
-            const testImg = new Image();
-            const timeout = setTimeout(() => {
-                updateStatus('offline', 'Stream connection timed out');
-                updateLastChecked();
-            }, 5000);
-
-            testImg.onload = function() {
-                clearTimeout(timeout);
-                updateStatus('online', 'Stream endpoint is accessible');
-                updateLastChecked();
-                detectStreamResolution();
-            };
-
-            testImg.onerror = function() {
-                clearTimeout(timeout);
-                updateStatus('offline', 'Stream endpoint is not accessible');
-                updateLastChecked();
-            };
-
-            testImg.src = `https://printstream.drewburr.com/snapshot?n=1&t=${Date.now()}`;
-        }
-
-        function detectStreamResolution() {
-            const testImg = new Image();
-            testImg.onload = function() {
-                const newWidth = this.naturalWidth;
-                const newHeight = this.naturalHeight;
-
-                if (newWidth > 0 && newHeight > 0) {
-                    currentResolution.width = newWidth;
-                    currentResolution.height = newHeight;
-                    adjustIframeSize(newWidth, newHeight);
-                    updateStreamInfo(newWidth, newHeight, false);
-                } else {
-                    // Fallback to default
-                    const defaultWidth = 640;
-                    const defaultHeight = 480;
-                    currentResolution.width = defaultWidth;
-                    currentResolution.height = defaultHeight;
-                    adjustIframeSize(defaultWidth, defaultHeight);
-                    updateStreamInfo(defaultWidth, defaultHeight, true);
+                    currentFPS = frameTimestamps.length;
+                    updateFPSDisplay();
                 }
             };
 
-            testImg.onerror = function() {
-                // Fallback to default
-                const defaultWidth = 640;
-                const defaultHeight = 480;
-                currentResolution.width = defaultWidth;
-                currentResolution.height = defaultHeight;
-                adjustIframeSize(defaultWidth, defaultHeight);
-                updateStreamInfo(defaultWidth, defaultHeight, true);
+            websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateStatus('offline', 'WebSocket connection error.');
+                updateLastChecked();
+                showLoading(false);
+                reconnectBtn.disabled = false;
             };
 
-            testImg.src = `https://printstream.drewburr.com/snapshot?n=1&t=${Date.now()}`;
+            websocket.onclose = (event) => {
+                console.log('WebSocket connection closed:', event.reason || 'No reason given');
+                updateStatus('offline', 'Stream disconnected.');
+                updateLastChecked();
+                showLoading(false);
+                reconnectBtn.disabled = false;
+                if (currentObjectUrl) {
+                    URL.revokeObjectURL(currentObjectUrl);
+                    currentObjectUrl = null;
+                }
+                streamFrame.src = ""; // Clear image
+                currentFPS = 0;
+                updateFPSDisplay();
+            };
+
+            streamFrame.onload = () => {
+                detectStreamResolutionFromImage(streamFrame);
+            };
+        }
+
+        function disconnectWebSocket() {
+            if (websocket) {
+                websocket.close(1000, "Client initiated disconnect");
+                websocket = null;
+            }
+        }
+
+        function reconnectWebSocket() {
+            disconnectWebSocket();
+            // A small delay to ensure the old connection is closed before opening a new one.
+            setTimeout(connectWebSocket, 100);
+        }
+
+        function detectStreamResolutionFromImage(img) {
+            const newWidth = img.naturalWidth;
+            const newHeight = img.naturalHeight;
+
+            if (newWidth > 0 && newHeight > 0 &&
+                (newWidth !== currentResolution.width || newHeight !== currentResolution.height)) {
+                currentResolution.width = newWidth;
+                currentResolution.height = newHeight;
+                adjustIframeSize(newWidth, newHeight);
+                updateStreamInfo(newWidth, newHeight, false);
+            } else if (currentResolution.width === 0 && newWidth > 0) {
+                // First frame after loading with no prior resolution
+                currentResolution.width = newWidth;
+                currentResolution.height = newHeight;
+                adjustIframeSize(newWidth, newHeight);
+                updateStreamInfo(newWidth, newHeight, false);
+            }
         }
 
         function adjustIframeSize(width, height) {
             const container = document.querySelector('.stream-container');
-            const containerWidth = container.clientWidth - 40; // Account for padding
-            const maxHeight = window.innerHeight * 0.8; // Max 80% of viewport height
+            const containerWidth = container.clientWidth - 40;
+            const maxHeight = window.innerHeight * 0.8;
 
-            // Calculate aspect ratio
             const aspectRatio = width / height;
-
-            // Calculate new dimensions maintaining aspect ratio
             let newWidth = Math.min(containerWidth, width);
             let newHeight = newWidth / aspectRatio;
 
-            // If height is too large, scale down based on height
             if (newHeight > maxHeight) {
                 newHeight = maxHeight;
                 newWidth = newHeight * aspectRatio;
             }
 
-            // Apply new dimensions to img element
+            // Direct DOM updates - no batching for simplicity
             streamFrame.style.width = newWidth + 'px';
             streamFrame.style.height = newHeight + 'px';
-
-            // Ensure the container adjusts to the stream size
-            container.style.minHeight = (newHeight + 40) + 'px'; // Add padding
+            container.style.minHeight = (newHeight + 40) + 'px';
         }
 
         function updateStreamInfo(width, height, isEstimated = false) {
@@ -459,9 +406,8 @@
         }
 
         function updateFPSDisplay() {
-            const fpsValue = document.getElementById('fpsValue');
             if (fpsValue) {
-                fpsValue.textContent = currentFPS > 0 ? currentFPS.toFixed(1) : '0';
+                fpsValue.textContent = currentFPS.toFixed(1);
             }
         }
 
@@ -473,13 +419,6 @@
             } else {
                 document.exitFullscreen();
             }
-        }
-
-        function startPeriodicCheck() {
-            // Check stream status every 30 seconds
-            streamCheckInterval = setInterval(() => {
-                checkStreamStatus();
-            }, 30000);
         }
 
         function initializeTheme() {
@@ -502,32 +441,32 @@
             themeToggle.textContent = theme === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode';
         }
 
+        // Simplified resize handler
+        function handleResize() {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                if (currentResolution.width > 0 && currentResolution.height > 0) {
+                    adjustIframeSize(currentResolution.width, currentResolution.height);
+                }
+            }, 200);
+        }
+
         // Handle visibility change to pause/resume stream when tab is not active
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) {
-                // Only stop stream when tab is completely hidden, not just unfocused
-                stopSnapshotStream();
-                clearInterval(streamCheckInterval);
+                disconnectWebSocket();
             } else {
-                // Resume stream when tab becomes visible again
-                startSnapshotStream();
-                startPeriodicCheck();
-                checkStreamStatus();
+                if (isInitialized) {
+                    reconnectWebSocket();
+                }
             }
         });
 
-        // Handle window resize to readjust iframe size
-        window.addEventListener('resize', function() {
-            if (currentResolution.width > 0 && currentResolution.height > 0) {
-                adjustIframeSize(currentResolution.width, currentResolution.height);
-            }
-        });
+        window.addEventListener('resize', handleResize);
 
-        // Cleanup on page unload
         window.addEventListener('beforeunload', function() {
-            stopSnapshotStream();
-            clearInterval(streamCheckInterval);
-            clearTimeout(loadTimeout);
+            disconnectWebSocket();
+            clearTimeout(resizeTimeout);
         });
     </script>
 </body>
